@@ -3,30 +3,21 @@
 #include <Adafruit_GPS.h>
 #include <SD.h>
 
-// Coordenadas por defecto (San José, Costa Rica)
 const float LAT_DEFECTO = 9.9281;
 const float LON_DEFECTO = -84.0907;
 
-
-// LCD: RS, E, D4-D7
 LiquidCrystal lcd(7, 6, 5, 4, 3, 2);
 
-// DHT11
 #define DHTPIN 8
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// Sensor de humedad de suelo
 #define PIN_HUMEDAD A0
-
-// Módulo SD
 #define PIN_SD_CS 53
 
-// GPS (Serial1 en Mega)
 Adafruit_GPS GPS(&Serial1);
 uint32_t timer = millis();
 
-// Pines de LEDs y zumbador
 #define LED_ROJO     22
 #define LED_AMARILLO 23
 #define LED_VERDE    24
@@ -34,8 +25,18 @@ uint32_t timer = millis();
 #define LED_AZUL     26
 #define BUZZER       27
 
-// Estado anterior del suelo
 String estadoAnterior = "";
+
+// Se evita sonido si humedad es 0 o muy baja
+void bip(int cantidad, int humedad) {
+  if (humedad <= 1) return;
+  for (int i = 0; i < cantidad; i++) {
+    digitalWrite(BUZZER, HIGH);
+    delay(500);
+    digitalWrite(BUZZER, LOW);
+    delay(500);
+  }
+}
 
 void setup() {
   Serial.begin(9600);
@@ -66,13 +67,11 @@ void setup() {
 }
 
 void loop() {
-  // Leer sensores
   float temp = dht.readTemperature();
   float humAmb = dht.readHumidity();
   int humedadSuelo = analogRead(PIN_HUMEDAD);
   int humedadSueloPorc = map(humedadSuelo, 0, 1023, 100, 0);
 
-  // Leer GPS
   GPS.read();
   bool tieneFix = false;
   float lat = 0.0;
@@ -87,8 +86,7 @@ void loop() {
     lat = GPS.latitude;
     lon = GPS.longitude;
   }
-
-  // Mostrar en LCD
+   humedadSueloPorc = 9;
   lcd.setCursor(0, 0);
   lcd.print("T:");
   lcd.print(isnan(temp) ? "Err " : String(temp) + "C ");
@@ -100,7 +98,6 @@ void loop() {
   lcd.print(humedadSueloPorc);
   lcd.print("%    ");
 
-  // Apagar indicadores
   digitalWrite(LED_ROJO, LOW);
   digitalWrite(LED_AMARILLO, LOW);
   digitalWrite(LED_VERDE, LOW);
@@ -108,28 +105,35 @@ void loop() {
   digitalWrite(LED_AZUL, LOW);
   digitalWrite(BUZZER, LOW);
 
-  // Determinar estado del suelo
   String estadosuelo = "";
-  if (humedadSueloPorc <= 10) {
-    digitalWrite(LED_ROJO, HIGH);
-    digitalWrite(BUZZER, HIGH);
-    estadosuelo = "Muy seco";
-  } else if (humedadSueloPorc <= 30) {
-    digitalWrite(LED_AMARILLO, HIGH);
-    estadosuelo = "Seco";
-  } else if (humedadSueloPorc <= 60) {
-    digitalWrite(LED_VERDE, HIGH);
-    estadosuelo = "Ideal";
-  } else if (humedadSueloPorc <= 80) {
-    digitalWrite(LED_BLANCO, HIGH);
-    estadosuelo = "Humedo";
-  } else {
-    digitalWrite(LED_AZUL, HIGH);
-    digitalWrite(BUZZER, HIGH);
-    estadosuelo = "Muy humedo";
-  }
+  int bips = 0;
 
-  // Solo guardar si el estado del suelo cambió
+if (humedadSueloPorc >= 0 && humedadSueloPorc <= 10) {
+  digitalWrite(LED_ROJO, HIGH);
+  estadosuelo = "Muy seco";
+  bips = 1;
+} else if (humedadSueloPorc > 10 && humedadSueloPorc <= 30) {
+  digitalWrite(LED_AMARILLO, HIGH);
+  estadosuelo = "Seco";
+} else if (humedadSueloPorc > 30 && humedadSueloPorc <= 60) {
+  digitalWrite(LED_VERDE, HIGH);
+  estadosuelo = "Ideal";
+
+} else if (humedadSueloPorc > 60 && humedadSueloPorc <= 80) {
+  digitalWrite(LED_BLANCO, HIGH);
+  estadosuelo = "Húmedo";
+} else if (humedadSueloPorc > 80 && humedadSueloPorc <= 100) {
+  digitalWrite(LED_AZUL, HIGH);
+  estadosuelo = "Muy húmedo";
+  bips = 2;
+} else {
+  digitalWrite(LED_AZUL, HIGH);
+  estadosuelo = "Muy húmedo";
+}
+
+
+  bip(bips, humedadSueloPorc);
+
   if (estadosuelo != estadoAnterior) {
     File dataFile = SD.open("datos.txt", FILE_WRITE);
     if (dataFile) {
@@ -142,32 +146,21 @@ void loop() {
       dataFile.print(" % - ");
       dataFile.print(estadosuelo);
 
-      // Usar coordenadas del GPS si hay fix, si no, usar las de respaldo
-    float latitudFinal = tieneFix ? lat : LAT_DEFECTO;
-    float longitudFinal = tieneFix ? lon : LON_DEFECTO;
+      float latitudFinal = tieneFix ? lat : LAT_DEFECTO;
+      float longitudFinal = tieneFix ? lon : LON_DEFECTO;
 
-    dataFile.print(", Lat: ");
-    dataFile.print(latitudFinal, 6);
-    dataFile.print(", Lon: ");
-    dataFile.print(longitudFinal, 6);
-
-      //if (tieneFix) {
-        //dataFile.print(", Lat: ");
-        //dataFile.print(lat, 6);
-        //dataFile.print(", Lon: ");
-        //dataFile.print(lon, 6);
-      //} else {
-        //dataFile.print(", Sin GPS");
-      //}
-
+      dataFile.print(", Lat: ");
+      dataFile.print(latitudFinal, 6);
+      dataFile.print(", Lon: ");
+      dataFile.print(longitudFinal, 6);
       dataFile.println();
       dataFile.close();
+
       Serial.println("Dato guardado en SD: " + estadosuelo);
     } else {
       Serial.println("Error al escribir en SD");
     }
 
-    // Actualizar estado anterior
     estadoAnterior = estadosuelo;
   }
 
